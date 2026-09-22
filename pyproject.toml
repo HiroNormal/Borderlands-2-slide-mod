@@ -1,0 +1,15 @@
+[project]
+name = "slide"
+version = "1.0.0"
+authors = [{ name = "Hironormal" }]
+description = """\
+Sprint, then crouch, to slide. Jump during a slide to cancel it, keep the speed, and slide again on landing. Downhill slides speed up, and uphill slides slow down.
+"""
+dependencies = [
+    "tweens >= 1.0",
+]
+
+[tool.sdkmod]
+name = "Slide"
+supported_games = ["BL2", "TPS", "AoDK"]
+coop_support = "RequiresAllPlayers"
