@@ -17,6 +17,20 @@ SLIDE_SPEED_DEFAULT: float = 2
 CROUCHED_PCT_DEFAULT: float = 0.5
 FALLING_MOVE: str = "WillowGame.WillowPlayerController:PlayerFalling.PlayerMove"
 FALLING_HOOK_ID: str = "slide:jump-carry"
+HUD_HOOK_ID: str = "slide:icon"
+
+_CLIP_PREFIXES: tuple[str, ...] = ("p1.", "p2.", "p3.", "p4.", "")
+_HUD_HOOK_CANDIDATES: tuple[str, ...] = (
+    "WillowGame.WillowHUD:PostRender",
+    "GearboxFramework.GearboxHUD:PostRender",
+    "Engine.HUD:PostRender",
+    "GFxUI.GFxMoviePlayer:PostAdvance",
+)
+
+_installed_hud_hooks: list[str] = []
+_clip_prefix: str | None = None
+_missing_clip_logged: bool = False
+_hud_error_logged: bool = False
 
 
 class State:
@@ -319,6 +333,98 @@ def _local_pc() -> WillowPlayerController | None:
         return None
 
 
+def _hiding(pc: WillowPlayerController) -> bool:
+    """True for a normal crouch and for a slide, which is also a crouch."""
+    if bool(pc.bDuck):
+        return True
+    pawn = pc.Pawn
+    if pawn is None:
+        return False
+    try:
+        return float(pawn.CrouchedPct) > CROUCHED_PCT_DEFAULT + 0.05
+    except Exception:
+        return False
+
+
+def _hud_movie(pc: WillowPlayerController) -> UObject | None:
+    try:
+        return cast("UObject | None", pc.GetHUDMovie())
+    except Exception:
+        return None
+
+
+def _clip_prefix_for(movie: UObject) -> str | None:
+    global _clip_prefix, _missing_clip_logged
+    if _clip_prefix is not None:
+        return _clip_prefix
+    for prefix in _CLIP_PREFIXES:
+        try:
+            clip = movie.GetVariableObject(prefix + "crouch")
+        except Exception:
+            clip = None
+        if clip is not None:
+            _clip_prefix = prefix
+            return prefix
+    if not _missing_clip_logged:
+        _missing_clip_logged = True
+        logging.warning("Slide: could not find the crouch icon.")
+    return None
+
+
+def _hide_icon(pc: WillowPlayerController) -> None:
+    global _hud_error_logged
+    if not _hiding(pc):
+        return
+    movie = _hud_movie(pc)
+    if movie is None:
+        return
+    prefix = _clip_prefix_for(movie)
+    if prefix is None:
+        return
+    path = prefix + "crouch"
+    try:
+        movie.SetVariableBool(path + "._visible", False)
+        movie.SetVariableNumber(path + "._alpha", 0)
+    except Exception:
+        if not _hud_error_logged:
+            _hud_error_logged = True
+            logging.warning("Slide: failed to hide the crouch icon.")
+
+
+def _after_hud(
+    obj: UObject,
+    _args: WrappedStruct,
+    _ret: Any,
+    _func: BoundFunction,
+) -> None:
+    pc = _local_pc()
+    if pc is None or not _hiding(pc):
+        return
+    movie = _hud_movie(pc)
+    hud = getattr(pc, "myHUD", None)
+    if obj != movie and obj != hud:
+        return
+    _hide_icon(pc)
+
+
+def _install_hud_hooks() -> None:
+    _remove_hud_hooks()
+    for path in _HUD_HOOK_CANDIDATES:
+        if not _function_exists(path):
+            continue
+        add_hook(path, Type.POST, HUD_HOOK_ID, _after_hud)
+        _installed_hud_hooks.append(path)
+
+
+def _remove_hud_hooks() -> None:
+    while _installed_hud_hooks:
+        path = _installed_hud_hooks.pop()
+        try:
+            remove_hook(path, Type.POST, HUD_HOOK_ID)
+        except Exception:
+            pass
+
+
 def _same_player(left: WillowPlayerController, right: WillowPlayerController) -> bool:
     if left == right:
         return True
@@ -538,10 +644,10 @@ def _carry_jump_speed(pc: WillowPlayerController) -> None:
 
 def _on_enable() -> None:
     global _falling_hooked
-    if _falling_hooked or not _function_exists(FALLING_MOVE):
-        return
-    add_hook(FALLING_MOVE, Type.POST, FALLING_HOOK_ID, _on_falling_move)
-    _falling_hooked = True
+    if not _falling_hooked and _function_exists(FALLING_MOVE):
+        add_hook(FALLING_MOVE, Type.POST, FALLING_HOOK_ID, _on_falling_move)
+        _falling_hooked = True
+    _install_hud_hooks()
 
 
 def _on_disable() -> None:
@@ -552,6 +658,7 @@ def _on_disable() -> None:
         except Exception:
             pass
         _falling_hooked = False
+    _remove_hud_hooks()
     pc = _local_pc()
     if pc is not None and OWN_SLIDE_STATE.is_sliding:
         exit_slide(pc)
@@ -650,6 +757,26 @@ def handle_move_after(
     _carry_jump_speed(cast("WillowPlayerController", obj))
 
 
+@hook("WillowGame.WillowPlayerController:PlayerWalking.PlayerMove", Type.POST)
+def handle_move_after_icon(
+    obj: UObject,
+    _args: WrappedStruct,
+    _ret: Any,
+    _func: BoundFunction,
+) -> None:
+    pc = cast("WillowPlayerController", obj)
+    local = _local_pc()
+    if local is None:
+        return
+    if pc != local:
+        try:
+            if pc.PlayerReplicationInfo != local.PlayerReplicationInfo:
+                return
+        except Exception:
+            return
+    _hide_icon(pc)
+
+
 def _on_falling_move(
     obj: UObject,
     _args: WrappedStruct,
@@ -698,7 +825,15 @@ def handle_duck_after(
 
 
 mod = build_mod(
-    hooks=[handle_move, handle_move_after, handle_duck, handle_duck_after, jump, jump_carry],
+    hooks=[
+        handle_move,
+        handle_move_after,
+        handle_move_after_icon,
+        handle_duck,
+        handle_duck_after,
+        jump,
+        jump_carry,
+    ],
     options=[dip_weapon],
     on_enable=_on_enable,
     on_disable=_on_disable,
