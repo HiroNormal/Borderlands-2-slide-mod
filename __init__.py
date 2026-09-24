@@ -13,7 +13,7 @@ from unrealsdk.unreal import BoundFunction, UObject, WeakPointer, WrappedStruct
 if TYPE_CHECKING:
     from common import WillowGameEngine, WillowPlayerController, WillowPlayerPawn, WorldInfo
 
-SLIDE_SPEED_DEFAULT: float = 2.2
+SLIDE_SPEED_DEFAULT: float = 2
 CROUCHED_PCT_DEFAULT: float = 0.5
 FALLING_MOVE: str = "WillowGame.WillowPlayerController:PlayerFalling.PlayerMove"
 FALLING_HOOK_ID: str = "slide:jump-carry"
@@ -80,7 +80,7 @@ def next_slide_speed(speed: float, z_diff: float, delta_time: float) -> float:
     """Slow the slide over time. Downhill (negative z) gives a little speed back."""
     if z_diff < 0:
         return speed - z_diff * 0.0005
-    return speed - (delta_time * 0.7 + z_diff * 0.004)
+    return speed - (delta_time * 0.7 + z_diff * 0.007)
 
 
 def _function_exists(hook_path: str) -> bool:
