@@ -338,6 +338,39 @@ def _tell_client_to_exit(pc: WillowPlayerController) -> None:
         client_exit_slide(pri)
 
 
+def _should_end_slide(pc: WillowPlayerController, pawn: WillowPlayerPawn) -> bool:
+    return not still_sliding(pc, pawn) or float(pawn.CrouchedPct) < CROUCHED_PCT_DEFAULT
+
+
+def _handle_local_slide_update(pc: WillowPlayerController, pawn: WillowPlayerPawn, delta_time: float) -> None:
+    if not OWN_SLIDE_STATE.is_sliding or jump_carry_active():
+        return
+    if _should_end_slide(pc, pawn):
+        exit_slide(pc)
+        return
+    update_slide_speed(pc, OWN_SLIDE_STATE, delta_time)
+    if float(pawn.CrouchedPct) < CROUCHED_PCT_DEFAULT:
+        exit_slide(pc)
+
+
+def _handle_jump_carry_move(pc: WillowPlayerController, pawn: WillowPlayerPawn) -> None:
+    if not jump_carry_active():
+        return
+    if _jump_has_landed(pawn):
+        _finish_jump_carry(pc, pawn, landed=True)
+    elif not State.saw_air:
+        pc.bDuck = False
+        _launch_slide_jump(pc, pawn)
+    elif State.carry_until and world_time() > State.carry_until:
+        _finish_jump_carry(pc, pawn, landed=bool(pawn.IsOnGroundOrShortFall()))
+
+
+def _handle_chained_slide_check(pc: WillowPlayerController) -> None:
+    local = _local_pc()
+    if local is not None and _same_player(pc, local) and _chain_window_open() and bool(pc.bDuck):
+        _start_chained_slide(pc)
+
+
 def server_tick_slides(delta_time: float) -> None:
     """Decay every sliding player once per frame, including clients while the host is standing."""
     global _last_server_tick
@@ -359,7 +392,7 @@ def server_tick_slides(delta_time: float) -> None:
         if not data.is_sliding:
             continue
         pawn = cast("WillowPlayerPawn", pc.Pawn)
-        if not still_sliding(pc, pawn) or float(pawn.CrouchedPct) < CROUCHED_PCT_DEFAULT:
+        if _should_end_slide(pc, pawn):
             data.is_sliding = False
             pawn.CrouchedPct = CROUCHED_PCT_DEFAULT
             _tell_client_to_exit(pc)
@@ -595,32 +628,16 @@ def handle_move(
     if pawn is None:
         return
 
-    # Only knock crouch off until the jump has left the ground. After that, crouch
-    # can start the next slide the moment you land.
     local_mover = _local_pc()
-    if local_mover is not None and _same_player(pc, local_mover) and jump_carry_active():
-        if _jump_has_landed(pawn):
-            _finish_jump_carry(pc, pawn, landed=True)
-        elif not State.saw_air:
-            pc.bDuck = False
-            _launch_slide_jump(pc, pawn)
-        elif State.carry_until and world_time() > State.carry_until:
-            _finish_jump_carry(pc, pawn, landed=bool(pawn.IsOnGroundOrShortFall()))
+    if local_mover is not None and _same_player(pc, local_mover):
+        _handle_jump_carry_move(pc, pawn)
 
     if is_client():
-        if OWN_SLIDE_STATE.is_sliding and not jump_carry_active():
-            if not still_sliding(pc, pawn):
-                exit_slide(pc)
-            else:
-                update_slide_speed(pc, OWN_SLIDE_STATE, float(args.DeltaTime))
-                if float(pawn.CrouchedPct) < CROUCHED_PCT_DEFAULT:
-                    exit_slide(pc)
+        _handle_local_slide_update(pc, pawn, float(args.DeltaTime))
     else:
         server_tick_slides(float(args.DeltaTime))
 
-    local = _local_pc()
-    if local is not None and _same_player(pc, local) and _chain_window_open() and bool(pc.bDuck):
-        _start_chained_slide(pc)
+    _handle_chained_slide_check(pc)
 
 
 @hook("WillowGame.WillowPlayerController:PlayerWalking.PlayerMove", Type.POST)
